@@ -27,8 +27,8 @@ pub enum UnpackError {
     },
 }
 
-pub trait OscUnpack: Sized {
-    fn unpack(address: &str, type_tag: &[u8], data: &[u8]) -> Result<Self, UnpackError>;
+pub trait OscUnpack<'a>: Sized {
+    fn unpack(address: &'a str, type_tag: &'a [u8], data: &'a [u8]) -> Result<Self, UnpackError>;
 }
 
 /// 4バイトアラインメント後のバイト数。マクロ展開から `osc_pack::padded_len` として参照される。
@@ -56,9 +56,9 @@ pub fn encode_osc_blob(data: &[u8], buf: &mut Vec<u8>) {
 }
 
 /// OSC 文字列デコード (null終端 + 4バイトアライン)
-/// 成功時は (文字列, 残りのスライス) を返す
+/// 成功時は (文字列参照, 残りのスライス) を返す - ゼロコピー
 #[inline(always)]
-pub fn decode_osc_string(data: &[u8]) -> Option<(String, &[u8])> {
+pub fn decode_osc_string(data: &[u8]) -> Option<(&str, &[u8])> {
     // null終端を探す
     let null_pos = data.iter().position(|&b| b == 0)?;
     let s = std::str::from_utf8(&data[..null_pos]).ok()?;
@@ -69,13 +69,13 @@ pub fn decode_osc_string(data: &[u8]) -> Option<(String, &[u8])> {
         return None;
     }
 
-    Some((s.to_string(), &data[padded..]))
+    Some((s, &data[padded..]))
 }
 
 /// OSC blob デコード (4バイト長 + データ + 4バイトアライン)
-/// 成功時は (データ, 残りのスライス) を返す
+/// 成功時は (データ参照, 残りのスライス) を返す - ゼロコピー
 #[inline(always)]
-pub fn decode_osc_blob(data: &[u8]) -> Option<(Vec<u8>, &[u8])> {
+pub fn decode_osc_blob(data: &[u8]) -> Option<(&[u8], &[u8])> {
     if data.len() < 4 {
         return None;
     }
@@ -87,7 +87,7 @@ pub fn decode_osc_blob(data: &[u8]) -> Option<(Vec<u8>, &[u8])> {
         return None;
     }
 
-    let blob = data[4..4 + len].to_vec();
+    let blob = &data[4..4 + len];
     Some((blob, &data[4 + padded..]))
 }
 
@@ -212,11 +212,11 @@ mod tests {
     }
 
     #[derive(OscPack, OscUnpack, Debug, PartialEq)]
-    struct UnpackTest {
+    struct UnpackTest<'a> {
         freq: f32,
         gain: f32,
         note: i32,
-        label: String,
+        label: &'a str,
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
             freq: 440.0,
             gain: 0.8,
             note: 69,
-            label: "A4".to_string(),
+            label: "A4",
         };
 
         let mut buf = Vec::new();
@@ -289,16 +289,16 @@ mod tests {
     }
 
     #[derive(OscPack, OscUnpack, Debug, PartialEq)]
-    struct WithBlob {
+    struct WithBlob<'a> {
         id: i32,
-        data: Vec<u8>,
+        data: &'a [u8],
     }
 
     #[test]
     fn unpack_blob() {
         let original = WithBlob {
             id: 100,
-            data: vec![1, 2, 3, 4, 5],
+            data: &[1, 2, 3, 4, 5],
         };
 
         let mut buf = Vec::new();
@@ -313,14 +313,14 @@ mod tests {
     }
 
     #[derive(OscPack, OscUnpack, Debug, PartialEq)]
-    struct AllTypes {
+    struct AllTypes<'a> {
         i: i32,
         f: f32,
         h: i64,
         d: f64,
         b: bool,
-        s: String,
-        blob: Vec<u8>,
+        s: &'a str,
+        blob: &'a [u8],
     }
 
     #[test]
@@ -331,8 +331,8 @@ mod tests {
             h: 9223372036854775807,
             d: 2.718281828,
             b: true,
-            s: "test".to_string(),
-            blob: vec![0xde, 0xad, 0xbe, 0xef],
+            s: "test",
+            blob: &[0xde, 0xad, 0xbe, 0xef],
         };
 
         let mut buf = Vec::new();

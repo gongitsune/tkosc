@@ -11,3 +11,10 @@ members = [
 
 [dependencies]
 tkosc-macros = { path = "tkosc-macros" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "decode_benchmark"
+harness = false

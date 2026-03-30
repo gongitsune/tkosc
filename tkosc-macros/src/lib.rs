@@ -44,6 +44,23 @@ impl OscTag {
 fn parse_tag(ty: &Type) -> Option<OscTag> {
     let path = match ty {
         Type::Path(p) => &p.path,
+        Type::Reference(r) => {
+            // &str と &[u8] をサポート
+            if let Type::Path(p) = &*r.elem {
+                return match p.path.segments.last()?.ident.to_string().as_str() {
+                    "str" => Some(OscTag::Str),
+                    _ => None,
+                };
+            }
+            if let Type::Slice(s) = &*r.elem {
+                if let Type::Path(p) = &*s.elem {
+                    if p.path.is_ident("u8") {
+                        return Some(OscTag::Blob);
+                    }
+                }
+            }
+            return None;
+        }
         _ => return None,
     };
     let last = path.segments.last()?;
@@ -76,6 +93,7 @@ const fn padded_len(n: usize) -> usize {
 pub fn derive_osc_pack(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let name = &ast.ident;
+    let generics = &ast.generics;
 
     let named_fields = match &ast.data {
         Data::Struct(s) => match &s.fields {
@@ -197,8 +215,10 @@ pub fn derive_osc_pack(input: TokenStream) -> TokenStream {
     // ----------------------------------------------------------------
     // 4. impl 組み立て
     // ----------------------------------------------------------------
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     let expanded = quote! {
-        impl tkosc::OscPack for #name {
+        impl #impl_generics tkosc::OscPack for #name #ty_generics #where_clause {
             #[inline]
             fn pack(&self, address: &str, buf: &mut Vec<u8>) {
                 #reserve_expr
@@ -216,6 +236,7 @@ pub fn derive_osc_pack(input: TokenStream) -> TokenStream {
 pub fn derive_osc_unpack(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let name = &ast.ident;
+    let generics = &ast.generics;
 
     let named_fields = match &ast.data {
         Data::Struct(s) => match &s.fields {
@@ -277,49 +298,49 @@ pub fn derive_osc_unpack(input: TokenStream) -> TokenStream {
         match f.tag {
             OscTag::Int32 => quote! {
                 let #ident = {
-                    if data.len() < 4 {
+                    if __tkosc_data.len() < 4 {
                         return Err(tkosc::UnpackError::UnexpectedEof {
                             field: stringify!(#ident),
                         });
                     }
-                    let bytes: [u8; 4] = data[..4].try_into().unwrap();
-                    data = &data[4..];
+                    let bytes: [u8; 4] = __tkosc_data[..4].try_into().unwrap();
+                    __tkosc_data = &__tkosc_data[4..];
                     i32::from_be_bytes(bytes)
                 };
             },
             OscTag::Float32 => quote! {
                 let #ident = {
-                    if data.len() < 4 {
+                    if __tkosc_data.len() < 4 {
                         return Err(tkosc::UnpackError::UnexpectedEof {
                             field: stringify!(#ident),
                         });
                     }
-                    let bytes: [u8; 4] = data[..4].try_into().unwrap();
-                    data = &data[4..];
+                    let bytes: [u8; 4] = __tkosc_data[..4].try_into().unwrap();
+                    __tkosc_data = &__tkosc_data[4..];
                     f32::from_be_bytes(bytes)
                 };
             },
             OscTag::Int64 => quote! {
                 let #ident = {
-                    if data.len() < 8 {
+                    if __tkosc_data.len() < 8 {
                         return Err(tkosc::UnpackError::UnexpectedEof {
                             field: stringify!(#ident),
                         });
                     }
-                    let bytes: [u8; 8] = data[..8].try_into().unwrap();
-                    data = &data[8..];
+                    let bytes: [u8; 8] = __tkosc_data[..8].try_into().unwrap();
+                    __tkosc_data = &__tkosc_data[8..];
                     i64::from_be_bytes(bytes)
                 };
             },
             OscTag::Float64 => quote! {
                 let #ident = {
-                    if data.len() < 8 {
+                    if __tkosc_data.len() < 8 {
                         return Err(tkosc::UnpackError::UnexpectedEof {
                             field: stringify!(#ident),
                         });
                     }
-                    let bytes: [u8; 8] = data[..8].try_into().unwrap();
-                    data = &data[8..];
+                    let bytes: [u8; 8] = __tkosc_data[..8].try_into().unwrap();
+                    __tkosc_data = &__tkosc_data[8..];
                     f64::from_be_bytes(bytes)
                 };
             },
@@ -328,21 +349,21 @@ pub fn derive_osc_unpack(input: TokenStream) -> TokenStream {
             },
             OscTag::Str => quote! {
                 let #ident = {
-                    let (s, rest) = tkosc::decode_osc_string(data)
+                    let (s, rest) = tkosc::decode_osc_string(__tkosc_data)
                         .ok_or_else(|| tkosc::UnpackError::InvalidString {
                             field: stringify!(#ident),
                         })?;
-                    data = rest;
+                    __tkosc_data = rest;
                     s
                 };
             },
             OscTag::Blob => quote! {
                 let #ident = {
-                    let (b, rest) = tkosc::decode_osc_blob(data)
+                    let (b, rest) = tkosc::decode_osc_blob(__tkosc_data)
                         .ok_or_else(|| tkosc::UnpackError::InvalidBlob {
                             field: stringify!(#ident),
                         })?;
-                    data = rest;
+                    __tkosc_data = rest;
                     b
                 };
             },
@@ -352,32 +373,67 @@ pub fn derive_osc_unpack(input: TokenStream) -> TokenStream {
     let field_names = fields.iter().map(|f| f.ident);
     let fields_count = fields.len();
 
-    // ----------------------------------------------------------------
-    // 3. impl 組み立て
-    // ----------------------------------------------------------------
-    let expanded = quote! {
-        impl tkosc::OscUnpack for #name {
-            fn unpack(address: &str, type_tag: &[u8], mut data: &[u8]) -> Result<Self, tkosc::UnpackError> {
-                // type tag の長さチェック
-                if type_tag.len() != #fields_count {
-                    return Err(tkosc::UnpackError::TagCountMismatch {
-                        expected: #fields_count,
-                        found: type_tag.len(),
-                    });
+    // ライフタイム付きのジェネリクスを構築
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    
+    // ライフタイムパラメータが存在するか確認
+    let has_lifetime = !generics.lifetimes().collect::<Vec<_>>().is_empty();
+    
+    let impl_code = if has_lifetime {
+        // 既にライフタイムがある場合
+        quote! {
+            impl #impl_generics tkosc::OscUnpack<'a> for #name #ty_generics #where_clause {
+                fn unpack(address: &'a str, type_tag: &'a [u8], data: &'a [u8]) -> Result<Self, tkosc::UnpackError> {
+                    let mut __tkosc_data = data;
+                    
+                    // type tag の長さチェック
+                    if type_tag.len() != #fields_count {
+                        return Err(tkosc::UnpackError::TagCountMismatch {
+                            expected: #fields_count,
+                            found: type_tag.len(),
+                        });
+                    }
+
+                    // type tag の各要素チェック
+                    #(#tag_checks)*
+
+                    // 各フィールドのデコード
+                    #(#decode_stmts)*
+
+                    Ok(Self {
+                        #(#field_names),*
+                    })
                 }
+            }
+        }
+    } else {
+        // ライフタイムがない場合（固定サイズ型のみ）
+        quote! {
+            impl<'a> tkosc::OscUnpack<'a> for #name #ty_generics #where_clause {
+                fn unpack(address: &'a str, type_tag: &'a [u8], data: &'a [u8]) -> Result<Self, tkosc::UnpackError> {
+                    let mut __tkosc_data = data;
+                    
+                    // type tag の長さチェック
+                    if type_tag.len() != #fields_count {
+                        return Err(tkosc::UnpackError::TagCountMismatch {
+                            expected: #fields_count,
+                            found: type_tag.len(),
+                        });
+                    }
 
-                // type tag の各要素チェック
-                #(#tag_checks)*
+                    // type tag の各要素チェック
+                    #(#tag_checks)*
 
-                // 各フィールドのデコード
-                #(#decode_stmts)*
+                    // 各フィールドのデコード
+                    #(#decode_stmts)*
 
-                Ok(Self {
-                    #(#field_names),*
-                })
+                    Ok(Self {
+                        #(#field_names),*
+                    })
+                }
             }
         }
     };
 
-    expanded.into()
+    impl_code.into()
 }
