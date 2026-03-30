@@ -1,27 +1,28 @@
 # TKOSC
 
-高性能なOSC (Open Sound Control) パック/アンパックライブラリ
+This is a simple OSC implementation for personal use.
 
-## 特徴
 
-- **マクロベースの自動実装**: `#[derive(OscPack, OscUnpack)]`で構造体の変換を自動生成
-- **コンパイル時最適化**: 固定長フィールドのサイズ計算は完全にコンパイル時に畳み込み
-- **ゼロコピー設計**: バッファの再利用により不要なアロケーションを排除
-- **型安全**: Rustの型システムによる安全なシリアライゼーション/デシリアライゼーション
+## Features
 
-## 対応型
+- **Macro-based automatic implementation**: Converts structures automatically using #[derive(OscPack, OscUnpack)].
+- **Compile-time optimization**: Size calculation for fixed-length fields is performed entirely at compile time.
+- **Zero-copy design**: Eliminates unnecessary allocations through buffer reuse.
+- **Type safety**: Ensures secure serialization and deserialization utilizing Rust's type system.
 
-| Rust型 | OSCタグ | 説明 |
+## Compatible types
+
+| Rust Type | OSC Tag | description |
 |--------|---------|------|
-| `i32` | `i` | 32ビット整数 |
-| `f32` | `f` | 32ビット浮動小数点数 |
-| `i64` | `h` | 64ビット整数 |
-| `f64` | `d` | 64ビット浮動小数点数 |
-| `bool` | `T/F` | 真偽値 |
-| `String` | `s` | 文字列 |
-| `Vec<u8>` | `b` | バイナリデータ (blob) |
+| `i32` | `i` | 32bit int |
+| `f32` | `f` | 32bit float |
+| `i64` | `h` | 64bit int |
+| `f64` | `d` | 64bit double |
+| `bool` | `T/F` | boolean |
+| `String` | `s` | string |
+| `Vec<u8>` | `b` | binary data (blob) |
 
-## 使用例
+## Usage
 
 ```rust
 use tkosc::{OscPack, OscUnpack};
@@ -35,7 +36,7 @@ struct SynthParams {
 }
 
 fn main() {
-    // パック
+    // Pack
     let params = SynthParams {
         freq: 440.0,
         gain: 0.8,
@@ -46,43 +47,42 @@ fn main() {
     let mut buf = Vec::new();
     params.pack("/synth/note", &mut buf);
 
-    // アンパック
+    // Unpack
     let (address, rest) = tkosc::decode_osc_string(&buf).unwrap();
     let (type_tag_str, rest) = tkosc::decode_osc_string(rest).unwrap();
-    let type_tag = &type_tag_str.as_bytes()[1..]; // カンマを除く
+    let type_tag = &type_tag_str.as_bytes()[1..];
 
     let decoded = SynthParams::unpack(&address, type_tag, rest).unwrap();
     assert_eq!(decoded, params);
 }
 ```
 
-## パフォーマンス最適化
+## Performance
 
-### バッファの再利用
+### Reuse buffer
 
 ```rust
 let mut buf = Vec::with_capacity(64);
 for params in params_list {
-    buf.clear(); // バッファをクリアして再利用
+    buf.clear();
     params.pack("/synth/note", &mut buf);
     send_osc_message(&buf);
 }
 ```
 
-### コンパイル時サイズ計算
+### Calculate size when compile time
 
-固定長フィールド（i32, f32, i64, f64）のサイズはコンパイル時に計算されます。
+The size of fixed field (i32, f32, i64, f64) calculated at compile time.
 
 ```rust
 #[derive(OscPack)]
 struct Fixed {
-    a: i32,  // 4バイト
-    b: f32,  // 4バイト
-    c: i64,  // 8バイト
+    a: i32,  // 4byte
+    b: f32,  // 4byte
+    c: i64,  // 8byte
 }
-// 合計16バイトはコンパイル時定数として展開
 ```
 
-## ライセンス
+## LICENSE
 
 MIT
